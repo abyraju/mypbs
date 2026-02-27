@@ -1,0 +1,228 @@
+════════════════════════════════════════════════════════════════
+PBS — Personal Banking System
+CHANGELOG — v1.0.0  First Formal Release
+════════════════════════════════════════════════════════════════
+
+
+────────────────────────────────────────────────────────────────
+OVERVIEW
+────────────────────────────────────────────────────────────────
+
+First formal release. Two focused changes from v0.5.4:
+
+  1. Charts section completely rebuilt — two static side-by-side
+     cards replaced with a single full-width tabbed card housing
+     four distinct chart views.
+
+  2. Payment method list redesigned — card name on top, total
+     amount spent on the right, supporting info below.
+
+No data model changes. No sync format changes. Fully backward
+compatible with all v0.5.x localStorage data.
+
+
+────────────────────────────────────────────────────────────────
+FEATURE 1 — TABBED CHART SECTION
+────────────────────────────────────────────────────────────────
+
+BEFORE (v0.5.4):
+  Two fixed side-by-side cards — "Spending Over Time" (line)
+  and "By Category" (donut) — with a separate date filter card
+  below them. The two-column grid collapsed to single column on
+  mobile but each chart still occupied its own card with its
+  own padding and heading.
+
+AFTER (v1.0.0):
+  One full-width card with a pill-tab switcher at the top.
+  Switching tabs shows a different chart canvas; only the active
+  chart is rendered. The date filter row is merged into the card
+  header and is always visible regardless of which tab is active.
+
+NEW — Four chart tabs
+
+  📈 Over Time
+    The existing daily spending line chart. Now full card width
+    instead of half. Person and Card filters are shown only on
+    this tab (hidden on all others).
+
+  🍩 By Category
+    The existing donut chart, now full card width and paired
+    with a custom legend table to its right. The table lists
+    every category sorted by spend, with a colour swatch and
+    percentage. The built-in Chart.js legend is disabled in
+    favour of this cleaner sidebar list. The Category filter
+    dropdown is shown only on this tab.
+
+  👤 By Person
+    New horizontal bar chart. Each bar represents one person,
+    length proportional to their total spend across all
+    filtered transactions. Bars are individually coloured using
+    the shared CHART_COLORS palette. No additional filters —
+    From/To date range applies.
+
+  📅 Monthly
+    New grouped bar chart covering the last 6 calendar months.
+    Automatically identifies your top 5 spending categories
+    across all time and plots one bar per category per month,
+    side by side within each month group. Includes a bottom
+    legend identifying each category by colour. No additional
+    filters — always shows the trailing 6 months regardless
+    of the From/To range.
+
+CHANGED — Filter layout
+  The separate "Date filters + actions" card that sat below the
+  charts is removed. Its contents are now in the chart card
+  header:
+    · From and To date inputs — always visible, inline
+    · Person select — visible only on the Over Time tab
+    · Card select — visible only on the Over Time tab
+    · Category select — visible only on the By Category tab
+    · ✕ Clear button — clears all filters, re-renders active tab
+    · 📊 Summary button — opens the monthly summary card modal
+
+CHANGED — CSS
+  · New .chart-tabs, .chart-tab-btn, .chart-panel classes added
+  · .chart-tab-btn uses pill style (border-radius: 20px) with
+    gold fill on active state
+  · .chart-panel { display: none } / .chart-panel.active
+    { display: block } controls visibility per tab
+  · .charts-grid CSS class retained for backward compat but
+    the two-card grid HTML is gone
+
+CHANGED — JS — new globals
+  let personChart  = null;
+  let monthlyChart = null;
+  let activeChartTab = 'time';
+
+CHANGED — JS — new functions
+  switchChartTab(tab, btn)
+    · Sets activeChartTab, toggles .active on panels and buttons
+    · Shows/hides contextual filter elements per tab
+    · Calls renderCharts() to render only the newly active chart
+
+  renderCharts()
+    · Now dispatches to one of four render functions based on
+      activeChartTab rather than always rendering both charts
+
+  renderPersonChart(txs, …)
+    · Aggregates total spend per person name from filtered txs
+    · Renders a Chart.js horizontal bar (indexAxis: 'y') chart
+    · Sorted descending by total spend
+    · requestAnimationFrame resize call after creation
+
+  renderMonthlyChart(…)
+    · Builds an array of the last 6 YYYY-MM month strings
+    · Finds top 5 categories by all-time total spend
+    · For each category, sums spend within each of the 6 months
+    · Renders a Chart.js grouped bar chart (stacked: false)
+    · requestAnimationFrame resize call after creation
+
+CHANGED — JS — existing functions
+  renderLineChart()
+    · Signature updated to accept pre-computed isDark, gridColor,
+      tickColor, isMobile, sym rather than re-computing them
+    · Logic otherwise unchanged
+
+  renderDonutChart()
+    · Signature updated (same pattern as above)
+    · Chart.js legend disabled — replaced by custom HTML legend
+      rendered into #catLegendTable alongside the canvas
+    · Legend shows: colour swatch, category name, percentage
+    · Sorted by spend descending so highest category is first
+
+  ResizeObserver (in init())
+    · Observer target changed from .charts-grid to the parent
+      .card element of #chartPanel-time
+    · Now calls resize() on all four chart instances, not just
+      lineChart and donutChart
+
+  window resize listener
+    · Was: if (lineChart || donutChart) renderCharts()
+    · Now: renderCharts() unconditionally when dashboard is active
+      (new charts may not yet exist on first resize)
+
+CHANGED — HTML — chart section
+  Old structure:
+    <div class="charts-grid">        ← two-column grid
+      <div class="card">lineChart</div>
+      <div class="card">donutChart</div>
+    </div>
+    <div class="card">filters</div> ← separate card
+
+  New structure:
+    <div class="card p-5">          ← one full-width card
+      <div>tab pills + filters</div>
+      <div class="chart-panel" id="chartPanel-time">lineChart</div>
+      <div class="chart-panel" id="chartPanel-category">donutChart + legend</div>
+      <div class="chart-panel" id="chartPanel-person">personChart</div>
+      <div class="chart-panel" id="chartPanel-monthly">monthlyChart</div>
+    </div>
+
+
+────────────────────────────────────────────────────────────────
+FEATURE 2 — PAYMENT METHOD LIST REDESIGN
+────────────────────────────────────────────────────────────────
+
+BEFORE (v0.5.4):
+  Each payment card showed:
+    [icon]  Name ••last4
+            method · symbol currency · N tx
+            [Edit] [Del]  ← admin only, inline right
+
+  The "price" (total spent) was not shown at all. Edit and Del
+  buttons were floated to the far right of the single row,
+  which looked cramped on mobile.
+
+AFTER (v1.0.0):
+  Each payment card shows:
+    [icon]  Name ••last4          $total.00
+            method · currency · N tx   total spent
+            [Edit] [Del]  ← admin only, below the name
+
+  Changes in detail:
+
+  Total spend calculation
+    · renderPaymentList() now filters DB.transactions by
+      paymentId and sums the amount field
+    · Displayed as sym + total.toFixed(2) in DM Mono, 16px,
+      font-weight 700, right-aligned
+
+  "total spent" label
+    · 10px muted text below the amount, right-aligned
+    · Gives clear context — it is cumulative across all time,
+      not a balance or limit
+
+  Name line
+    · Font size explicit at 14px
+    · overflow: hidden + text-overflow: ellipsis + white-space:
+      nowrap applied so long card names don't break the layout
+    · min-width: 0 on parent div allows it to shrink correctly
+
+  Admin buttons
+    · Moved from the far right of the header row to a flex row
+      below the name/meta text (inside the left column)
+    · margin-top: 8px separates them from the meta line
+    · Right side of the card is now solely the amount display,
+      uncluttered by action buttons
+
+  Icon container
+    · align-items: center on the outer flex row changed to keep
+      the icon vertically centred against the taller left column
+    · No size or colour changes to the icon badge itself
+
+
+────────────────────────────────────────────────────────────────
+VERSION HISTORY SUMMARY
+────────────────────────────────────────────────────────────────
+
+  v0.5.0  Mobile responsive rewrite
+  v0.5.1  Six responsive bug fixes (CSS cascade, modal, tabs)
+  v0.5.2  Mobile modal bottom-sheet polish, input left padding
+  v0.5.3  Transaction Name field, input truncation, tx tab width
+  v0.5.4  Chart responsive fix (grid reflow, ResizeObserver)
+  v1.0.0  Tabbed chart section, payment list total spend display
+
+
+════════════════════════════════════════════════════════════════
+END OF CHANGELOG
+════════════════════════════════════════════════════════════════

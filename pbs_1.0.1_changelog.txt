@@ -1,0 +1,402 @@
+════════════════════════════════════════════════════════════════
+PBS — Personal Banking System
+CHANGELOG — v1.1.0
+════════════════════════════════════════════════════════════════
+
+
+────────────────────────────────────────────────────────────────
+OVERVIEW
+────────────────────────────────────────────────────────────────
+
+One major feature addition from v1.0.0:
+
+  Currency Conversion System — payment methods and all four
+  chart views can now display amounts converted to the user's
+  base currency, enabling side-by-side comparison of cards
+  that transact in different currencies (e.g. CAD and INR).
+
+No data model changes. No sync format changes. Fully backward
+compatible with all v1.0.x localStorage data. Exchange rates
+are stored in DB.settings.exchangeRates and persist between
+sessions.
+
+
+────────────────────────────────────────────────────────────────
+FEATURE — CURRENCY CONVERSION SYSTEM
+────────────────────────────────────────────────────────────────
+
+PROBLEM SOLVED:
+  Users with multiple payment methods in different currencies
+  (e.g. a Canadian Mastercard in CAD, an HDFC card in INR,
+  and a Wise account in USD) had no way to compare totals
+  or view charts in a single unified currency. All amounts
+  were displayed in their native currency, making any
+  aggregate view meaningless across cards.
+
+SOLUTION:
+  A toggleable conversion layer that converts all amounts to
+  the user's base currency (as set in Settings). Two
+  independent toggles — one for the payment list, one for
+  charts — let users switch views without affecting data.
+  Exchange rates are stored locally and can be updated
+  manually or fetched live.
+
+
+NEW — Exchange Rates Modal  (📐 Rates button, Profiles tab)
+
+  Accessible via the "📐 Rates" button next to Payment Methods.
+  Shows one row per currency that differs from the base currency.
+  Each row displays:
+    · Currency code and symbol
+    · Description: "1 [code] = ? [base]"
+    · Editable numeric input for the rate
+
+  "🌐 Fetch Live Rates" button
+    · Calls open.er-api.com (free, no API key required) to
+      retrieve current exchange rates relative to the base
+      currency.
+    · Populates all rate fields in the modal automatically.
+    · User must press Save to commit fetched rates — no
+      auto-save, so rates can be reviewed before applying.
+    · If the network request fails (offline or API down),
+      a clear error message is shown and existing rates
+      are preserved.
+
+  "Save Rates" button
+    · Writes all rate inputs to DB.settings.exchangeRates
+      (persisted via localStorage).
+    · Triggers re-render of payment list and charts if
+      the respective convert toggle is active.
+
+  Default rates
+    · A DEFAULT_RATES constant provides reasonable fallback
+      values if no custom rates have been saved yet. These
+      are approximate and intended only as a starting point.
+
+
+NEW — ⇄ Convert toggle — Payment Methods list
+
+  Button location: header row of the Payment Methods section
+  in the Profiles tab, to the left of the existing "+ Add"
+  button.
+
+  Behaviour when inactive (default):
+    · Each card shows its own native currency total, unchanged
+      from v1.0.0.
+
+  Behaviour when active:
+    · Cards whose currency matches the base currency are
+      unaffected — they display normally.
+    · Cards with a foreign currency convert each transaction's
+      amount to the base currency using the stored rate.
+    · The amount symbol changes to the base currency symbol.
+    · A small gold "→ [BASE]" badge appears next to the
+      amount to clearly signal conversion is active.
+    · The "total spent" label changes to "converted total".
+
+  Toggle state is in-memory only (resets on page reload),
+  so the default view always shows native currencies.
+
+
+NEW — ⇄ Convert toggle — Charts
+
+  Button location: chart card header, between the "✕ Clear"
+  and "📊 Summary" buttons.
+
+  Behaviour when active:
+    · All four chart tabs (Over Time, By Category, By Person,
+      Monthly) render using converted amounts.
+    · The Y-axis and tooltip labels use the base currency
+      symbol regardless of which currencies the underlying
+      transactions are in.
+    · The conversion is applied before data is aggregated —
+      daily totals, category sums, per-person totals, and
+      monthly breakdowns are all computed from converted
+      values.
+    · Transactions that are already in the base currency are
+      unaffected (multiply by 1.0).
+    · The Monthly chart additionally converts amounts when
+      computing the top-5 category ranking, ensuring the
+      ranking reflects true economic weight across all
+      currencies.
+
+  Toggle state is in-memory only (resets on page reload).
+
+
+NEW — Rate hint in Payment Method modal
+
+  When adding or editing a payment method, selecting a
+  currency that differs from the base currency shows an
+  inline hint below the currency dropdown:
+
+    ⇄ 1 CAD ≈ $0.7300 USD · Edit Rates
+
+  The "Edit Rates" link opens the Exchange Rates modal
+  directly. This closes the loop so users can correct a
+  rate without losing their in-progress payment form.
+
+
+CHANGED — JS — new globals
+
+  const DEFAULT_RATES = { USD:1, EUR:1.08, GBP:1.27, … }
+    Fallback rates used if no custom rates have been saved.
+
+  let paymentConvertActive = false
+    Controls whether the payment list displays converted totals.
+
+  let chartConvertActive = false
+    Controls whether charts display converted amounts.
+
+CHANGED — JS — new functions
+
+  convertToBase(amount, fromCurrency)
+    Core conversion logic. Returns amount * (rates[from] /
+    rates[base]). No-ops when fromCurrency === base.
+
+  togglePaymentConversion()
+    Flips paymentConvertActive, toggles .active on the button,
+    re-renders the payment list.
+
+  toggleChartConversion()
+    Flips chartConvertActive, toggles .active on the button,
+    calls renderCharts().
+
+  openRatesModal()
+    Reads DB.settings.currency for the base label and
+    DB.settings.exchangeRates (fallback: DEFAULT_RATES) for
+    existing values. Builds one rate-row per non-base currency.
+    Opens the rates modal.
+
+  saveRates()
+    Reads all rate inputs from the modal, writes to
+    DB.settings.exchangeRates, calls save(), closes modal.
+    Re-renders active conversion views if toggles are on.
+
+  async fetchLiveRates()
+    Fetches JSON from open.er-api.com/v6/latest/{base}.
+    Populates input fields in the rates modal (does not
+    auto-save). Shows status feedback in #ratesFetchStatus.
+
+  updatePayModalRateHint()
+    Reads pmCurrency select value; hides hint if equals base;
+    otherwise shows "1 X ≈ baseSym{rate} base · Edit Rates".
+
+CHANGED — JS — existing functions
+
+  renderCharts()
+    · Now derives baseCurrency from DB.settings.currency.
+    · When chartConvertActive is true, builds a chartTxs
+      array where each transaction's amount is pre-converted
+      to base currency using convertToBase().
+    · Passes chartTxs (converted or original) to all four
+      chart render functions.
+    · Passes chartConvertActive flag to renderMonthlyChart()
+      so it can also convert category totals used for ranking.
+
+  renderMonthlyChart()
+    · Signature extended: accepts doConvert=false parameter.
+    · When doConvert is true, applies convertToBase() when
+      summing catTotals (for top-5 ranking) and when
+      accumulating per-month per-category data.
+
+  renderPaymentList()
+    · Checks paymentConvertActive for each payment card.
+    · When converting, sums transactions using convertToBase()
+      with t.currency (falling back to p.currency).
+    · Switches displayed symbol to base currency symbol.
+    · Appends "→ BASE" converted-badge to the amount display.
+    · Changes "total spent" label to "converted total".
+
+  openPaymentModal()
+    · Calls updatePayModalRateHint() after populating fields
+      so the hint reflects the loaded currency immediately.
+
+CHANGED — HTML
+
+  Payment Methods header (Profiles tab)
+    · Flex row now contains three controls: ⇄ Convert,
+      📐 Rates, + Add (left to right).
+
+  Chart card filter row
+    · ⇄ Convert button inserted between ✕ Clear and 📊 Summary.
+
+  Payment modal currency field
+    · select#pmCurrency gains onchange="updatePayModalRateHint()"
+    · #pmRateHint div added below select (hidden by default).
+
+  New modal: #ratesModal
+    · Full-width card with rate rows in #ratesTableBody.
+    · 🌐 Fetch Live Rates button + Save / Cancel footer.
+    · #ratesFetchStatus for async feedback.
+
+CHANGED — CSS
+
+  New classes:
+    .btn-convert       — gold-outlined toggle button, fills
+                         gold when .active
+    .rate-row          — flex row in the rates modal
+    .rate-currency-label — mono bold 52px-wide currency code
+    .rate-desc         — muted helper text
+    .rate-input        — narrow 110px numeric input
+    .converted-badge   — small gold chip "→ BASE" shown on
+                         converted payment card amounts
+
+
+────────────────────────────────────────────────────────────────
+VERSION HISTORY SUMMARY
+────────────────────────────────────────────────────────────────
+
+  v0.5.0  Mobile responsive rewrite
+  v0.5.1  Six responsive bug fixes (CSS cascade, modal, tabs)
+  v0.5.2  Mobile modal bottom-sheet polish, input left padding
+  v0.5.3  Transaction Name field, input truncation, tx tab width
+  v0.5.4  Chart responsive fix (grid reflow, ResizeObserver)
+  v1.0.0  Tabbed chart section, payment list total spend display
+  v1.1.0  Multi-currency conversion system (payment list + charts)
+
+
+════════════════════════════════════════════════════════════════
+END OF CHANGELOG
+════════════════════════════════════════════════════════════════
+
+
+════════════════════════════════════════════════════════════════
+PBS — Personal Banking System
+CHANGELOG — v1.1.1  Currency System Fixes & Expansion
+════════════════════════════════════════════════════════════════
+
+
+────────────────────────────────────────────────────────────────
+OVERVIEW
+────────────────────────────────────────────────────────────────
+
+Three focused fixes and improvements to the v1.1.0 currency
+conversion system:
+
+  1. Live rate fetching was broken — wrong API and inverted
+     logic. Replaced with a working free API and correct math.
+
+  2. Rates now auto-refresh every 24 hours in the background —
+     no manual action needed.
+
+  3. All ~160 world currencies added to every dropdown in the
+     app (Settings, Payment modal, Onboarding wizard).
+
+
+────────────────────────────────────────────────────────────────
+FIX 1 — LIVE RATE FETCH (BROKEN IN v1.1.0)
+────────────────────────────────────────────────────────────────
+
+PROBLEM:
+  open.er-api.com was the primary API. It blocked requests from
+  browser origins without an API key (CORS policy). The fetch
+  always failed silently or returned a non-success response.
+  Additionally, the rate-input population loop only iterated
+  over CURRENCIES (12 entries) and tried to find DOM inputs
+  that only existed if the rates modal was open.
+
+FIX:
+  · Primary API changed to api.frankfurter.app — free, no key,
+    explicitly CORS-friendly, maintained by ECB data.
+  · open.er-api.com retained as a silent fallback in case
+    frankfurter is unavailable.
+  · fetchLiveRates() no longer writes to DOM inputs. It writes
+    directly to DB.settings.exchangeRates and calls save().
+    If the rates modal happens to be open, it calls
+    openRatesModal() to re-render the inputs from the new data.
+  · Rate math clarified: frankfurter returns rates[X] = units
+    of X per 1 base, so stored rate = 1 / rates[X], giving
+    "1 unit of X = ? base units". This is identical to v1.1.0's
+    intended formula but was never reached due to the CORS bug.
+
+
+────────────────────────────────────────────────────────────────
+FIX 2 — AUTO 24-HOUR RATE REFRESH
+────────────────────────────────────────────────────────────────
+
+NEW — autoRefreshRatesIfStale()
+  · Reads DB.settings.ratesLastFetched (ISO timestamp written
+    by fetchLiveRates() on each successful fetch).
+  · If the timestamp is absent or older than 24 hours
+    (1,440 minutes), calls fetchLiveRates({ silent: true }).
+  · Silent mode suppresses status-bar text but shows a subtle
+    toast notification when rates are updated.
+
+CHANGED — init()
+  · Calls autoRefreshRatesIfStale() on startup so rates are
+    checked immediately when the app loads.
+  · Registers setInterval(autoRefreshRatesIfStale, 3600000) to
+    check again every hour — catches the 24-hour boundary
+    without requiring a page reload.
+
+CHANGED — DB.settings
+  · New field: ratesLastFetched (ISO string). Written by
+    fetchLiveRates() on each successful update. Persisted in
+    localStorage with the rest of DB.settings.
+
+CHANGED — Rates Modal
+  · Footer now shows "Last updated: <datetime>" sourced from
+    DB.settings.ratesLastFetched, or a prompt to fetch if
+    no timestamp exists.
+  · Fetch button re-labelled "🌐 Fetch Now" (was "Fetch Live
+    Rates") to convey it's an on-demand override.
+
+
+────────────────────────────────────────────────────────────────
+FIX 3 — ALL WORLD CURRENCIES
+────────────────────────────────────────────────────────────────
+
+BEFORE (v1.1.0):
+  CURRENCIES constant had 12 entries. All three currency
+  <select> elements (Settings, Payment modal, Onboarding wizard)
+  had those 12 currencies hard-coded as static <option> HTML.
+
+AFTER (v1.1.1):
+  CURRENCIES constant expanded to ~160 currencies covering
+  all ISO 4217 codes with circulating notes, including:
+  · All G20 + G7 currencies
+  · All Gulf Cooperation Council currencies
+  · Full South/Southeast Asian coverage
+  · African Union member currencies
+  · Latin American currencies
+  · Eastern European / CIS currencies
+  · Pacific island currencies
+
+NEW — currencyOptions(selected)
+  Generates sorted <option> HTML for every entry in CURRENCIES.
+  Used by populateCurrencySelects() to fill all three selects.
+
+NEW — populateCurrencySelects()
+  Iterates over ['sCurrency','pmCurrency','wCurrency'] and sets
+  their innerHTML to currencyOptions() output, preserving the
+  currently selected value if one exists.
+  Called from init() and openPaymentModal().
+
+CHANGED — Static HTML
+  · <select id="sCurrency"> in Settings: reduced to a single
+    USD placeholder. Populated dynamically at init.
+  · <select id="pmCurrency"> in Payment modal: same treatment.
+    populateCurrencySelects() is also called when the modal
+    opens if fewer than 10 options are present (safety guard).
+  · <select id="wCurrency"> in Onboarding wizard: same.
+
+CHANGED — Rates Modal
+  · #ratesTableBody now renders a row for every currency in
+    CURRENCIES except the base (~159 rows).
+  · A search/filter input (#ratesSearch) is added at the top
+    of the scrollable list so users can quickly find a specific
+    currency by typing its code (e.g. "INR", "CAD").
+  · The scrollable list (#ratesRowsWrap) has max-height:340px
+    to keep the modal usable without infinite scrolling.
+  · filterRateRows(q) hides/shows .rate-row elements whose
+    data-code attribute does not match the search query.
+
+CHANGED — DEFAULT_RATES
+  · Expanded from 12 to ~45 currencies covering the most
+    commonly used non-USD currencies, providing reasonable
+    fallback values before a live fetch completes.
+
+
+════════════════════════════════════════════════════════════════
+END OF CHANGELOG ADDITION
+════════════════════════════════════════════════════════════════
